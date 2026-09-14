@@ -1,0 +1,79 @@
+# Standalone VS Code build for the CCS MSPM0G3507 project.
+# Override these variables on the gmake command line if TI tools are moved.
+CCS_ROOT       ?= D:/CCS
+SDK_ROOT       ?= $(CCS_ROOT)/mspm0_sdk_2_10_00_04
+SYSCONFIG_ROOT ?= $(CCS_ROOT)/sysconfig_1.26.2
+TI_CLANG_ROOT  ?= $(CCS_ROOT)/ccs/tools/compiler/ti-cgt-armllvm_5.1.1.LTS
+
+PROJECT   := empty
+BUILD_DIR := build/vscode
+CC        := $(TI_CLANG_ROOT)/bin/tiarmclang.exe
+SYSCONFIG := $(SYSCONFIG_ROOT)/sysconfig_cli.bat
+PRODUCT   := $(SDK_ROOT)/.metadata/product.json
+STARTUP   := $(SDK_ROOT)/source/ti/devices/msp/m0p/startup_system_files/ticlang/startup_mspm0g350x_ticlang.c
+
+USER_SOURCES := $(wildcard *.c) $(wildcard Application/*.c) $(wildcard Hardware/*.c)
+USER_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USER_SOURCES))
+GENERATED_SOURCE := $(BUILD_DIR)/ti_msp_dl_config.c
+GENERATED_OBJECT := $(BUILD_DIR)/ti_msp_dl_config.o
+STARTUP_OBJECT := $(BUILD_DIR)/startup_mspm0g350x_ticlang.o
+OBJECTS := $(USER_OBJECTS) $(GENERATED_OBJECT) $(STARTUP_OBJECT)
+TARGET := $(BUILD_DIR)/$(PROJECT).out
+
+COMMON_FLAGS := -march=thumbv6m -mcpu=cortex-m0plus -mfloat-abi=soft \
+	-mlittle-endian -mthumb -O0 -gdwarf-3 -Wall
+INCLUDES := -I"$(CURDIR)" -I"$(CURDIR)/$(BUILD_DIR)" \
+	-I"$(SDK_ROOT)/source/third_party/CMSIS/Core/Include" -I"$(SDK_ROOT)/source"
+GENERATED_FILES := $(BUILD_DIR)/device.opt $(BUILD_DIR)/device_linker.cmd \
+	$(BUILD_DIR)/device.cmd.genlibs $(GENERATED_SOURCE) $(BUILD_DIR)/ti_msp_dl_config.h
+
+.PHONY: all clean rebuild check
+
+all: check $(TARGET)
+
+check:
+	@powershell -NoProfile -Command "if (!(Test-Path '$(CC)')) { Write-Error 'ERROR: TI Arm Clang not found: $(CC)'; exit 1 }"
+	@powershell -NoProfile -Command "if (!(Test-Path '$(SYSCONFIG)')) { Write-Error 'ERROR: SysConfig CLI not found: $(SYSCONFIG)'; exit 1 }"
+	@powershell -NoProfile -Command "if (!(Test-Path '$(PRODUCT)')) { Write-Error 'ERROR: MSPM0 SDK not found: $(SDK_ROOT)'; exit 1 }"
+
+$(BUILD_DIR):
+	@powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)' | Out-Null"
+
+$(GENERATED_FILES) &: empty.syscfg | $(BUILD_DIR)
+	@echo SysConfig - generating device configuration
+	@cmd.exe /D /C $(SYSCONFIG) -s $(PRODUCT) --script $< -o $(BUILD_DIR) --compiler ticlang
+
+$(BUILD_DIR)/%.o: %.c $(BUILD_DIR)/device.opt $(BUILD_DIR)/ti_msp_dl_config.h
+	@echo TI Arm Clang - compiling $<
+	@powershell -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$(dir $@)' | Out-Null"
+	@"$(CC)" -c @"$(BUILD_DIR)/device.opt" $(COMMON_FLAGS) $(INCLUDES) \
+		-MMD -MP -MF"$(@:.o=.d)" -MT"$@" -o"$@" "$<"
+
+$(GENERATED_OBJECT): $(GENERATED_SOURCE) $(BUILD_DIR)/device.opt
+	@echo TI Arm Clang - compiling generated SysConfig source
+	@"$(CC)" -c @"$(BUILD_DIR)/device.opt" $(COMMON_FLAGS) $(INCLUDES) \
+		-MMD -MP -MF"$(@:.o=.d)" -MT"$@" -o"$@" "$<"
+
+$(STARTUP_OBJECT): $(STARTUP) $(BUILD_DIR)/device.opt
+	@echo TI Arm Clang - compiling startup
+	@"$(CC)" -c @"$(BUILD_DIR)/device.opt" $(COMMON_FLAGS) $(INCLUDES) \
+		-MMD -MP -MF"$(@:.o=.d)" -MT"$@" -o"$@" "$<"
+
+$(TARGET): $(OBJECTS) $(BUILD_DIR)/device_linker.cmd $(BUILD_DIR)/device.cmd.genlibs
+	@echo TI Arm Clang - linking $@
+	@"$(CC)" @"$(BUILD_DIR)/device.opt" $(COMMON_FLAGS) \
+		-Wl,-m"$(BUILD_DIR)/$(PROJECT).map" \
+		-Wl,-i"$(SDK_ROOT)/source" -Wl,-i"$(CURDIR)" \
+		-Wl,-i"$(CURDIR)/$(BUILD_DIR)" -Wl,-i"$(TI_CLANG_ROOT)/lib" \
+		-Wl,--diag_wrap=off -Wl,--display_error_number -Wl,--warn_sections \
+		-Wl,--rom_model -o "$@" $(OBJECTS) \
+		-Wl,-l"$(CURDIR)/$(BUILD_DIR)/device_linker.cmd" \
+		-Wl,-l"$(CURDIR)/$(BUILD_DIR)/device.cmd.genlibs" -Wl,-llibc.a
+	@echo Build complete: $@
+
+clean:
+	@cmd.exe /D /C if exist $(BUILD_DIR) rmdir /S /Q $(BUILD_DIR)
+
+rebuild: clean all
+
+-include $(OBJECTS:.o=.d)

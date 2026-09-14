@@ -1,0 +1,32 @@
+# ===== 构建产物（CCS / VS Code）=====
+empty/Debug/
+empty/build/
+*.o
+*.d
+*.out
+*.map
+*.hex
+*.lst
+*.obj
+*.tmp
+
+# ===== 本机工具配置 =====
+.vscode/
+.theia/
+.codex/
+.agents/
+.clangd/
+**/.clangd/
+**/.clangd/**/*.idx
+
+# ===== 临时文件与备份 =====
+tmp/
+saved_versions/
+
+# ===== 第三方库与厂商资料（体积大，不入库）=====
+硬件资料/
+.tools/
+
+# ===== Python =====
+__pycache__/
+*.pyc
